@@ -6,8 +6,8 @@
     <title>AI Переводчик RU ⇄ PT</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
-        body { display: flex; flex-direction: column; height: 100vh; background: #121212; color: #fff; }
-        #settings { background: #1e1e1e; padding: 10px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; z-index: 10; }
+        body { display: flex; flex-direction: column; height: 100vh; background: #121212; color: #fff; overflow: hidden; }
+        #settings { background: #1e1e1e; padding: 10px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; z-index: 10; flex-shrink: 0; }
         input[type="password"] { padding: 8px; border-radius: 5px; border: 1px solid #444; background: #333; color: white; }
         button, select { padding: 8px 15px; border-radius: 5px; border: none; background: #007bff; color: white; font-weight: bold; cursor: pointer; }
         button:active { background: #0056b3; }
@@ -19,6 +19,9 @@
         .action-btn { width: 120px; height: 120px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; transition: 0.2s; background: #444; color: white; border: none; }
         .active-mic { background: #dc3545; box-shadow: 0 0 20px #dc3545; }
         #controller { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222; padding: 10px; border-radius: 10px; border: 2px solid #555; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+        
+        /* Блок диагностики */
+        #debugLog { height: 120px; background: #000; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; overflow-y: auto; border-top: 2px solid #333; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -49,7 +52,19 @@
         <button class="action-btn" id="ru-btn">Говорить</button>
     </div>
 
+    <!-- Монитор диагностики -->
+    <div id="debugLog">
+        <div>[Система] Интерфейс загружен. Ожидание ключа...</div>
+    </div>
+
     <script>
+        function logDebug(msg) {
+            const d = document.getElementById('debugLog');
+            const time = new Date().toLocaleTimeString();
+            d.innerHTML += `<div>[${time}] ${msg}</div>`;
+            d.scrollTop = d.scrollHeight;
+        }
+
         const apiKeyInput = document.getElementById('apiKey');
         apiKeyInput.value = localStorage.getItem('geminiApiKey') || '';
         apiKeyInput.addEventListener('change', () => localStorage.setItem('geminiApiKey', apiKeyInput.value));
@@ -88,6 +103,7 @@
             ptBtn.classList.remove('active-mic');
             
             if (currentMode === 'auto') {
+                setMicState(true); 
                 if (currentQueue === 'ru') {
                     document.getElementById('ru-status').innerText = 'СЛУШАЮ: РУССКИЙ...';
                     document.getElementById('pt-status').innerText = 'Aguardando...';
@@ -98,6 +114,7 @@
                     ptBtn.classList.add('active-mic');
                 }
             } else {
+                setMicState(false); 
                 document.getElementById('ru-status').innerText = 'Нажмите и держите (Рация)';
                 document.getElementById('pt-status').innerText = 'Pressione e segure (PTT)';
             }
@@ -122,36 +139,39 @@
         }
 
         async function startAudioCapture() {
-            mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: { noiseSuppression: true, echoCancellation: true, sampleRate: 16000 }
-            });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            if (audioContext.state === 'suspended') await audioContext.resume();
-            
-            const source = audioContext.createMediaStreamSource(mediaStream);
-            processor = audioContext.createScriptProcessor(4096, 1, 1);
-            
-            source.connect(processor);
-            processor.connect(audioContext.destination);
-            
-            processor.onaudioprocess = (e) => {
-                if (!mediaStream.getAudioTracks()[0].enabled || !ws || ws.readyState !== WebSocket.OPEN) return;
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { noiseSuppression: true, echoCancellation: true, sampleRate: 16000 }
+                });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                if (audioContext.state === 'suspended') await audioContext.resume();
                 
-                const inputData = e.inputBuffer.getChannelData(0);
-                const pcm16 = floatTo16BitPCM(inputData);
-                const base64Audio = arrayBufferToBase64(pcm16.buffer);
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
                 
-                ws.send(JSON.stringify({
-                    realtimeInput: {
-                        mediaChunks: [{
-                            mimeType: "audio/pcm;rate=16000",
-                            data: base64Audio
-                        }]
-                    }
-                }));
-            };
-            
-            setMicState(false); 
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+                
+                processor.onaudioprocess = (e) => {
+                    if (!mediaStream.getAudioTracks()[0].enabled || !ws || ws.readyState !== WebSocket.OPEN) return;
+                    
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const pcm16 = floatTo16BitPCM(inputData);
+                    const base64Audio = arrayBufferToBase64(pcm16.buffer);
+                    
+                    ws.send(JSON.stringify({
+                        realtimeInput: {
+                            mediaChunks: [{
+                                mimeType: "audio/pcm;rate=16000",
+                                data: base64Audio
+                            }]
+                        }
+                    }));
+                };
+                logDebug("Микрофон подключен.");
+            } catch (err) {
+                logDebug("ОШИБКА МИКРОФОНА: " + err.message);
+            }
         }
 
         function setMicState(enabled) {
@@ -164,20 +184,19 @@
             const key = apiKeyInput.value;
             if (!key) return alert("Введите реальный API ключ");
             
+            logDebug("Попытка соединения с сервером Google...");
             const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${key}`;
             ws = new WebSocket(url);
             
             ws.onopen = () => {
+                logDebug("Сокет открыт. Отправка настроек модели...");
                 connectBtn.innerText = "Подключено";
                 connectBtn.style.background = "#28a745";
                 
                 ws.send(JSON.stringify({
                     setup: {
                         model: "models/gemini-2.0-flash-exp",
-                        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-                        generationConfig: {
-                            responseModalities: ["AUDIO"] 
-                        }
+                        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] }
                     }
                 }));
             };
@@ -185,7 +204,9 @@
             ws.onmessage = async (event) => {
                 const msg = JSON.parse(event.data);
                 
-                if (msg.serverContent && msg.serverContent.modelTurn) {
+                if (msg.setupComplete) {
+                    logDebug("Сервер подтвердил настройки. Можно говорить.");
+                } else if (msg.serverContent && msg.serverContent.modelTurn) {
                     const parts = msg.serverContent.modelTurn.parts;
                     parts.forEach(part => {
                         if (part.text) {
@@ -193,13 +214,23 @@
                             document.getElementById('pt-text').innerText = part.text;
                         }
                         if (part.inlineData && part.inlineData.data) {
+                            logDebug("Получен аудио-ответ.");
                             playAudio(part.inlineData.data);
                         }
                     });
                 }
             };
             
-            ws.onerror = (e) => console.error("WebSocket ошибка", e);
+            ws.onerror = (e) => {
+                logDebug("Сетевая ошибка WebSocket (см. F12).");
+            };
+
+            ws.onclose = (event) => {
+                logDebug(`РАЗРЫВ СВЯЗИ. Код: ${event.code}. Причина: ${event.reason || 'неизвестна'}`);
+                connectBtn.innerText = "Подключить";
+                connectBtn.style.background = "#007bff";
+                setMicState(false);
+            };
         }
 
         async function playAudio(base64Data) {
@@ -207,9 +238,7 @@
             
             const binary = window.atob(base64Data);
             const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) { 
-                bytes[i] = binary.charCodeAt(i); 
-            }
+            for (let i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
             
             const int16Array = new Int16Array(bytes.buffer);
             const audioBuffer = audioContext.createBuffer(1, int16Array.length, 24000);
@@ -224,6 +253,7 @@
             source.connect(audioContext.destination);
             
             source.onended = () => {
+                logDebug("Озвучка завершена.");
                 if (currentMode === 'auto') {
                     currentQueue = currentQueue === 'ru' ? 'pt' : 'ru';
                     updateUI();
@@ -234,7 +264,9 @@
 
         connectBtn.addEventListener('click', async () => {
             if (!audioContext) await startAudioCapture();
-            connectWebSocket();
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                connectWebSocket();
+            }
             updateUI();
         });
 
@@ -244,6 +276,7 @@
                 if (currentMode === 'ptt') { 
                     setMicState(true); 
                     btn.classList.add('active-mic'); 
+                    logDebug("Отправка звука...");
                 }
             };
             const stopMic = (e) => { 
@@ -252,6 +285,7 @@
                     setMicState(false); 
                     btn.classList.remove('active-mic'); 
                     if (ws && ws.readyState === WebSocket.OPEN) {
+                        logDebug("Отпущена кнопка. Ожидание перевода...");
                         ws.send(JSON.stringify({ clientContent: { turnComplete: true } }));
                     }
                 }
