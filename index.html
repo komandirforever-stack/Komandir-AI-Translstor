@@ -193,10 +193,11 @@
                 
                 ws.send(JSON.stringify({
                     setup: {
-                        model: "models/gemini-2.0-flash", 
+                        model: "models/gemini-2.0-flash-exp", 
                         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
                         generationConfig: {
-                            responseModalities: ["AUDIO"] 
+                            responseModalities: ["AUDIO"],
+                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } }
                         }
                     }
                 }));
