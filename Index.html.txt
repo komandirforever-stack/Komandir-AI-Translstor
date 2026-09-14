@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Переводчик RU ⇄ PT</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+        body { display: flex; flex-direction: column; height: 100vh; background: #121212; color: #fff; }
+        
+        /* Панель настроек */
+        #settings { background: #1e1e1e; padding: 10px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; z-index: 10; }
+        input[type="password"] { padding: 8px; border-radius: 5px; border: 1px solid #444; background: #333; color: white; }
+        button, select { padding: 8px 15px; border-radius: 5px; border: none; background: #007bff; color: white; font-weight: bold; }
+        button:active { background: #0056b3; }
+        
+        /* Зоны собеседников */
+        .chat-zone { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; position: relative; }
+        .inverted { transform: rotate(180deg); background: #1a2a3a; border-bottom: 2px solid #000; }
+        .normal { background: #2a1a1a; }
+        
+        .status { font-size: 1.2rem; margin-bottom: 15px; color: #aaa; }
+        .transcript { font-size: 1.5rem; text-align: center; min-height: 60px; margin-bottom: 20px; }
+        
+        /* Главная кнопка */
+        .action-btn { width: 120px; height: 120px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; transition: 0.2s; background: #444; }
+        .active-mic { background: #dc3545; box-shadow: 0 0 20px #dc3545; }
+        
+        /* Центральный контроллер */
+        #controller { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222; padding: 10px; border-radius: 10px; border: 2px solid #555; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="settings">
+        <input type="password" id="apiKey" placeholder="Google AI API Key">
+        <select id="modeSelect">
+            <option value="auto">Режим: Автобеседа (Hands-free)</option>
+            <option value="ptt">Режим: Рация (Push-to-Talk)</option>
+        </select>
+        <button id="connectBtn">Подключить</button>
+    </div>
+
+    <!-- Сторона португальца -->
+    <div id="pt-zone" class="chat-zone inverted">
+        <div class="status" id="pt-status">Aguardando...</div>
+        <div class="transcript" id="pt-text">Tradução aparecerá aqui</div>
+        <button class="action-btn" id="pt-btn">Falar</button>
+    </div>
+
+    <!-- Центральный перехват очереди (только для Авто-режима) -->
+    <div id="controller">
+        <div style="font-size: 0.8rem; color: #888;">Очередь</div>
+        <button id="switchQueueBtn">Сменить ход 🔄</button>
+    </div>
+
+    <!-- Ваша сторона -->
+    <div id="ru-zone" class="chat-zone normal">
+        <div class="status" id="ru-status">Ожидание...</div>
+        <div class="transcript" id="ru-text">Здесь будет перевод</div>
+        <button class="action-btn" id="ru-btn">Говорить</button>
+    </div>
+
+    <script>
+        // Локальное хранение ключа, чтобы не вводить каждый раз
+        const apiKeyInput = document.getElementById('apiKey');
+        apiKeyInput.value = localStorage.getItem('geminiApiKey') || '';
+        apiKeyInput.addEventListener('change', () => localStorage.setItem('geminiApiKey', apiKeyInput.value));
+
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let currentMode = 'auto'; // 'auto' или 'ptt'
+        let currentQueue = 'ru'; // Чей сейчас ход в авто-режиме
+
+        const connectBtn = document.getElementById('connectBtn');
+        const modeSelect = document.getElementById('modeSelect');
+        const ruBtn = document.getElementById('ru-btn');
+        const ptBtn = document.getElementById('pt-btn');
+        const switchQueueBtn = document.getElementById('switchQueueBtn');
+
+        // Настройка системного промпта для чистого европейского португальского
+        const SYSTEM_INSTRUCTION = `Ты — синхронный переводчик. Пара: русский и европейский португальский (pt-PT). 
+        Строго запрещена бразильская фонетика и лексика. Используй только лиссабонский вариант. 
+        Не используй gerúndio. Переводи коротко и разговорно.`;
+
+        modeSelect.addEventListener('change', (e) => {
+            currentMode = e.target.value;
+            switchQueueBtn.style.display = currentMode === 'auto' ? 'block' : 'none';
+        });
+
+        switchQueueBtn.addEventListener('click', () => {
+            currentQueue = currentQueue === 'ru' ? 'pt' : 'ru';
+            updateUI();
+        });
+
+        async function initAudio() {
+            try {
+                // Запрос микрофона с нативным подавлением шума смартфона
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { noiseSuppression: true, echoCancellation: true }
+                });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                // По умолчанию микрофон аппаратно заглушен
+                setMicState(false); 
+                alert("Микрофон подключен успешно.");
+            } catch (err) {
+                alert("Ошибка доступа к микрофону: " + err.message);
+            }
+        }
+
+        function setMicState(enabled) {
+            if (mediaStream) {
+                mediaStream.getAudioTracks().forEach(track => {
+                    track.enabled = enabled;
+                });
+            }
+        }
+
+        function updateUI() {
+            // Сброс визуальных стилей кнопок
+            ruBtn.classList.remove('active-mic');
+            ptBtn.classList.remove('active-mic');
+            
+            if (currentMode === 'auto') {
+                if (currentQueue === 'ru') {
+                    document.getElementById('ru-status').innerText = 'СЛУШАЮ: РУССКИЙ...';
+                    document.getElementById('pt-status').innerText = 'Aguardando...';
+                    ruBtn.classList.add('active-mic');
+                } else {
+                    document.getElementById('pt-status').innerText = 'OUVINDO: PORTUGUÊS...';
+                    document.getElementById('ru-status').innerText = 'Ожидание...';
+                    ptBtn.classList.add('active-mic');
+                }
+            } else {
+                document.getElementById('ru-status').innerText = 'Нажмите и держите (Рация)';
+                document.getElementById('pt-status').innerText = 'Pressione e segure (PTT)';
+            }
+        }
+
+        connectBtn.addEventListener('click', () => {
+            if (!apiKeyInput.value) return alert("Введите API ключ");
+            initAudio();
+            // Здесь интегрируется логика WebSocket (BidiGenerateContent)
+            // ws = new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' + apiKeyInput.value);
+            
+            connectBtn.innerText = "Подключено";
+            connectBtn.style.background = "#28a745";
+            updateUI();
+        });
+
+        // Логика режима Рации (Push-to-Talk)
+        ruBtn.addEventListener('mousedown', () => { if(currentMode === 'ptt') setMicState(true); ruBtn.classList.add('active-mic'); });
+        ruBtn.addEventListener('mouseup', () => { if(currentMode === 'ptt') setMicState(false); ruBtn.classList.remove('active-mic'); });
+        ruBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if(currentMode === 'ptt') setMicState(true); ruBtn.classList.add('active-mic'); });
+        ruBtn.addEventListener('touchend', (e) => { e.preventDefault(); if(currentMode === 'ptt') setMicState(false); ruBtn.classList.remove('active-mic'); });
+
+        ptBtn.addEventListener('mousedown', () => { if(currentMode === 'ptt') setMicState(true); ptBtn.classList.add('active-mic'); });
+        ptBtn.addEventListener('mouseup', () => { if(currentMode === 'ptt') setMicState(false); ptBtn.classList.remove('active-mic'); });
+        ptBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if(currentMode === 'ptt') setMicState(true); ptBtn.classList.add('active-mic'); });
+        ptBtn.addEventListener('touchend', (e) => { e.preventDefault(); if(currentMode === 'ptt') setMicState(false); ptBtn.classList.remove('active-mic'); });
+
+        // Внимание: заглушка для воспроизведения аудио. 
+        // При получении серверного аудио, вызывается setMicState(false), 
+        // а после события onended возвращается setMicState(true) (в авторежиме) и currentQueue меняется.
+    </script>
+</body>
+</html>
