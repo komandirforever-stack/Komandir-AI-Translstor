@@ -183,7 +183,8 @@
             if (!key) return alert("Введите реальный API ключ");
             
             logDebug("Попытка соединения с сервером Google (v1beta)...");
-            // Обновлен URL: переход с закрытой v1alpha на рабочую v1beta
+            
+            // ИСПОЛЬЗУЕМ v1beta
             const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${key}`;
             ws = new WebSocket(url);
             
@@ -194,7 +195,8 @@
                 
                 ws.send(JSON.stringify({
                     setup: {
-                        model: "models/gemini-2.0-flash", 
+                        // ИСПОЛЬЗУЕМ -exp
+                        model: "models/gemini-2.0-flash-exp", 
                         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
                         generationConfig: {
                             responseModalities: ["AUDIO"],
