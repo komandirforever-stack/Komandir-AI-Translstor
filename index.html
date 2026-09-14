@@ -20,7 +20,6 @@
         .active-mic { background: #dc3545; box-shadow: 0 0 20px #dc3545; }
         #controller { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222; padding: 10px; border-radius: 10px; border: 2px solid #555; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 10px; }
         
-        /* Блок диагностики */
         #debugLog { height: 120px; background: #000; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; overflow-y: auto; border-top: 2px solid #333; flex-shrink: 0; }
     </style>
 </head>
@@ -52,7 +51,6 @@
         <button class="action-btn" id="ru-btn">Говорить</button>
     </div>
 
-    <!-- Монитор диагностики -->
     <div id="debugLog">
         <div>[Система] Интерфейс загружен. Ожидание ключа...</div>
     </div>
@@ -195,8 +193,11 @@
                 
                 ws.send(JSON.stringify({
                     setup: {
-                        model: "models/gemini-2.0-flash-exp",
-                        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] }
+                        model: "models/gemini-2.0-flash", 
+                        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+                        generationConfig: {
+                            responseModalities: ["AUDIO"] 
+                        }
                     }
                 }));
             };
